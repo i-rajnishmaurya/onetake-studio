@@ -115,6 +115,7 @@ type Job = {
   progress: number;
   stage?: string;
   error?: string | { message?: string };
+  output?: { path?: string | null; url?: string | null; meta?: unknown } | null;
 };
 
 const defaults: Settings = {
@@ -1182,15 +1183,21 @@ function Workspace({ route }: { route: string }) {
               {job.status === "succeeded" && (
                 <div className="video-result">
                   <video
-                    key={job.id}
+                    key={job.output?.url || job.id}
                     controls
                     autoPlay
                     muted
                     playsInline
                     preload="metadata"
-                    src={`/api/jobs/${encodeURIComponent(job.id)}/download`}
+                    src={job.output?.url || `/api/jobs/${encodeURIComponent(job.id)}/download`}
                   />
-                  <a href={`/api/jobs/${encodeURIComponent(job.id)}/download`} download className="button full">
+                  <a
+                    href={job.output?.url || `/api/jobs/${encodeURIComponent(job.id)}/download`}
+                    download
+                    target={job.output?.url ? "_blank" : undefined}
+                    rel={job.output?.url ? "noreferrer" : undefined}
+                    className="button full"
+                  >
                     <ArrowDownToLine size={17} /> Download MP4
                   </a>
                 </div>

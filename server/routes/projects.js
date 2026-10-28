@@ -14,6 +14,20 @@ const ROOT = path.resolve(__dirname, "../..");
 
 const router = Router();
 
+
+function jobOutput(j) {
+  if (!j.output_path && !j.output_meta_json) return null;
+  let meta = null;
+  try {
+    meta = j.output_meta_json ? JSON.parse(j.output_meta_json) : null;
+  } catch {}
+  return {
+    path: j.output_path || null,
+    url: meta?.url || null,
+    meta,
+  };
+}
+
 function projectPublic(row) {
   return {
     id: row.id,
@@ -358,9 +372,7 @@ router.get("/projects/:id/jobs", requireAuth, (req, res) => {
       stage: j.stage,
       error: j.error,
       resolution: j.resolution,
-      output: j.output_path
-        ? { path: j.output_path, meta: j.output_meta_json ? JSON.parse(j.output_meta_json) : null }
-        : null,
+      output: jobOutput(j),
       createdAt: j.created_at,
       updatedAt: j.updated_at,
     })),
@@ -384,9 +396,7 @@ router.get("/jobs/:id", requireAuth, (req, res) => {
       stage: j.stage,
       error: j.error,
       resolution: j.resolution,
-      output: j.output_path
-        ? { path: j.output_path, meta: j.output_meta_json ? JSON.parse(j.output_meta_json) : null }
-        : null,
+      output: jobOutput(j),
       createdAt: j.created_at,
       updatedAt: j.updated_at,
     },
@@ -445,7 +455,26 @@ router.get("/jobs/:id/download", requireAuth, (req, res) => {
   if (!j) {
     return res.status(404).json({ error: { code: "not_found", message: "Not found" } });
   }
-  if (j.status !== "succeeded" || !j.output_path || !fs.existsSync(j.output_path)) {
+  if (j.status !== "succeeded") {
+    return res.status(404).json({ error: { code: "not_found", message: "Video not ready" } });
+  }
+
+  let meta = null;
+  try {
+    meta = j.output_meta_json ? JSON.parse(j.output_meta_json) : null;
+  } catch {}
+
+  // Prefer Catbox (or any remote) URL for streaming/download
+  if (meta?.url && /^https?:\/\//i.test(meta.url)) {
+    if (req.query.proxy === "1" && j.output_path && fs.existsSync(j.output_path)) {
+      // optional local proxy
+    } else {
+      res.redirect(302, meta.url);
+      return;
+    }
+  }
+
+  if (!j.output_path || !fs.existsSync(j.output_path)) {
     return res.status(404).json({ error: { code: "not_found", message: "Video not ready" } });
   }
   res.setHeader("Content-Type", "video/mp4");

@@ -3,6 +3,7 @@ import { runPipeline } from "./pipeline.js";
 import path from "node:path";
 import fs from "node:fs";
 import { DATA_DIR } from "../db.js";
+import { tryUploadToCatbox } from "../storage/catbox.js";
 
 const CONCURRENCY = Number(process.env.RENDER_CONCURRENCY) || 2;
 const HEARTBEAT_MS = 5000;
@@ -156,17 +157,28 @@ async function processJob(job) {
       },
     });
 
+    // Upload to Catbox for durable public streaming/download URL
+    db.prepare(
+      `UPDATE jobs SET stage = ?, progress = ?, heartbeat_at = ?, updated_at = ? WHERE id = ?`
+    ).run("uploading", 0.98, now(), now(), job.id);
+
+    const catboxUrl = await tryUploadToCatbox(result.outputPath);
+    const meta = {
+      ...(result.meta || {}),
+      ...(catboxUrl ? { url: catboxUrl, storage: "catbox" } : { storage: "local" }),
+    };
+
     db.prepare(
       `UPDATE jobs SET status = 'succeeded', progress = 1, stage = 'done', output_path = ?, output_meta_json = ?, updated_at = ?, heartbeat_at = ?
        WHERE id = ?`
     ).run(
       result.outputPath,
-      JSON.stringify(result.meta || {}),
+      JSON.stringify(meta),
       now(),
       now(),
       job.id
     );
-    log("job succeeded", job.id);
+    log("job succeeded", job.id, catboxUrl || "(local only)");
   } catch (e) {
     const msg = e?.message || String(e);
     const canceled = msg === "canceled" || controller.signal.aborted;
