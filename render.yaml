@@ -1,0 +1,41 @@
+# OneTake Studio — single service on Render (backend + SPA)
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: onetake-studio
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: |
+      npm install --no-audit --no-fund
+      npm run web:build
+    startCommand: node server/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: PUBLIC_URL
+        sync: false
+      - key: VAULT_KEY
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: RENDER_CONCURRENCY
+        value: "1"
+      - key: DATA_DIR
+        value: /var/data
+      - key: LOG_LEVEL
+        value: info
+      - key: PYTHON_BIN
+        value: python3
+      - key: FFMPEG_BIN
+        value: ffmpeg
+    disk:
+      name: onetake-data
+      mountPath: /var/data
+      sizeGB: 1
