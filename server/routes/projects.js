@@ -7,6 +7,10 @@ import { requestCancel } from "../render/worker.js";
 import path from "node:path";
 import fs from "node:fs";
 import { DATA_DIR } from "../db.js";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, "../..");
 
 const router = Router();
 
@@ -207,12 +211,76 @@ router.get("/compositions/:id/html", requireAuth, (req, res) => {
   if (!row) {
     return res.status(404).json({ error: { code: "not_found", message: "Not found" } });
   }
+
+  let html = row.html || "";
+
+  // Inline motion.js so the sandboxed iframe does not need a relative fetch
+  try {
+    const motionPath = path.join(ROOT, "engine", "lib", "motion.js");
+    if (fs.existsSync(motionPath)) {
+      const motionSrc = fs.readFileSync(motionPath, "utf8");
+      const motionTag = `<script>/* motion.js inlined for preview */\n${motionSrc}\n</script>`;
+      if (/<script[^>]+src=["']motion\.js["'][^>]*><\/script>/i.test(html)) {
+        html = html.replace(/<script[^>]+src=["']motion\.js["'][^>]*><\/script>/i, motionTag);
+      } else if (/<\/body>/i.test(html)) {
+        html = html.replace(/<\/body>/i, motionTag + "\n</body>");
+      } else {
+        html += "\n" + motionTag;
+      }
+    }
+  } catch (e) {
+    console.warn("motion.js inline failed", e.message);
+  }
+
+  // Preview bootstrap: scale fixed W×H canvas into the iframe and play __seek loop
+  const previewBoot = `<script>(function(){
+  function fit(){
+    var root = document.getElementById('canvas') || document.getElementById('stage') || document.body;
+    var w = (window.__meta && window.__meta.w) || root.offsetWidth || 1920;
+    var h = (window.__meta && window.__meta.h) || root.offsetHeight || 1080;
+    var sw = window.innerWidth / w;
+    var sh = window.innerHeight / h;
+    var s = Math.min(sw, sh) || 1;
+    document.documentElement.style.background = getComputedStyle(document.body).backgroundColor || '#000';
+    document.body.style.margin = '0';
+    document.body.style.overflow = 'hidden';
+    document.body.style.width = w + 'px';
+    document.body.style.height = h + 'px';
+    document.body.style.transformOrigin = '0 0';
+    document.body.style.transform = 'scale(' + s + ')';
+    document.body.style.position = 'absolute';
+    document.body.style.left = ((window.innerWidth - w * s) / 2) + 'px';
+    document.body.style.top = ((window.innerHeight - h * s) / 2) + 'px';
+  }
+  function play(){
+    fit();
+    var dur = (window.__meta && Number(window.__meta.dur)) || 10;
+    if (typeof window.__seek !== 'function') return;
+    var t0 = performance.now();
+    function frame(now){
+      var t = ((now - t0) / 1000) % dur;
+      try { window.__seek(t); } catch (e) {}
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', play);
+  else play();
+  window.addEventListener('resize', fit);
+})();</script>`;
+
+  if (/<\/body>/i.test(html)) {
+    html = html.replace(/<\/body>/i, previewBoot + "\n</body>");
+  } else {
+    html += "\n" + previewBoot;
+  }
+
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self'; img-src data: blob:; media-src 'none'; connect-src 'none'; frame-ancestors 'self';"
+    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; media-src 'none'; connect-src 'none'; frame-ancestors 'self';"
   );
-  res.send(row.html || "");
+  res.send(html);
 });
 
 router.post("/projects/:id/render", requireAuth, (req, res) => {
