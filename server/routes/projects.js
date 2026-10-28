@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../auth.js";
 import { getDb, now, uuid } from "../db.js";
-import { generateComposition } from "../generation.js";
+import { enqueueGeneration } from "../generation.js";
 import { ProviderError } from "../providers/errors.js";
 import { requestCancel } from "../render/worker.js";
 import path from "node:path";
@@ -129,27 +129,27 @@ router.delete("/projects/:id", requireAuth, (req, res) => {
   res.status(204).end();
 });
 
-router.post("/projects/:id/generate", requireAuth, async (req, res) => {
+router.post("/projects/:id/generate", requireAuth, (req, res) => {
   try {
-    const composition = await generateComposition(req.params.id, req.user.id);
+    const composition = enqueueGeneration(req.params.id, req.user.id);
     res.status(202).json({ composition });
   } catch (e) {
-    const code = e.code || (e instanceof ProviderError ? "provider_error" : "server");
+    const code = e.code || "server";
     const status =
-      code === "not_found" ? 404 : code === "validation" ? 400 : code === "provider_error" ? 502 : 500;
+      code === "not_found" ? 404 : code === "validation" ? 400 : 500;
     res.status(status).json({
       error: { code, message: e.message, detail: e.detail },
     });
   }
 });
 
-router.post("/projects/:id/regenerate", requireAuth, async (req, res) => {
+router.post("/projects/:id/regenerate", requireAuth, (req, res) => {
   try {
-    const composition = await generateComposition(req.params.id, req.user.id);
+    const composition = enqueueGeneration(req.params.id, req.user.id);
     res.status(202).json({ composition });
   } catch (e) {
     const code = e.code || "server";
-    res.status(code === "not_found" ? 404 : 500).json({
+    res.status(code === "not_found" ? 404 : code === "validation" ? 400 : 500).json({
       error: { code, message: e.message },
     });
   }

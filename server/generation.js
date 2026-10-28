@@ -257,3 +257,141 @@ export async function generateComposition(projectId, userId) {
     createdAt: now(),
   };
 }
+
+
+/**
+ * Create a pending composition row and return it immediately (async generation).
+ */
+export function enqueueGeneration(projectId, userId) {
+  const db = getDb();
+  const project = db
+    .prepare(`SELECT * FROM projects WHERE id = ? AND user_id = ?`)
+    .get(projectId, userId);
+  if (!project) {
+    const err = new Error("Project not found");
+    err.code = "not_found";
+    throw err;
+  }
+  if (!project.connection_id || !project.model) {
+    const err = new Error("Project has no connection or model selected");
+    err.code = "validation";
+    throw err;
+  }
+  const conn = db
+    .prepare(`SELECT id FROM connections WHERE id = ? AND user_id = ?`)
+    .get(project.connection_id, userId);
+  if (!conn) {
+    const err = new Error("Connection not found");
+    err.code = "not_found";
+    throw err;
+  }
+
+  const versionRow = db
+    .prepare(`SELECT COALESCE(MAX(version), 0) AS v FROM compositions WHERE project_id = ?`)
+    .get(projectId);
+  const version = (versionRow?.v || 0) + 1;
+  const id = uuid();
+  const t = now();
+  db.prepare(
+    `INSERT INTO compositions (id, project_id, user_id, version, status, html, validation_json, error, created_at)
+     VALUES (?, ?, ?, ?, 'generating', NULL, NULL, NULL, ?)`
+  ).run(id, projectId, userId, version, t);
+
+  return {
+    id,
+    projectId,
+    version,
+    status: "generating",
+    validation: null,
+    createdAt: t,
+  };
+}
+
+/**
+ * Fill an existing pending composition (status=generating) with LLM output.
+ */
+export async function fillPendingComposition(compositionId, projectId, userId) {
+  const db = getDb();
+  const project = db
+    .prepare(`SELECT * FROM projects WHERE id = ? AND user_id = ?`)
+    .get(projectId, userId);
+  if (!project) throw new Error("Project not found");
+
+  const settings = JSON.parse(project.settings_json || "{}");
+  const conn = db
+    .prepare(`SELECT * FROM connections WHERE id = ? AND user_id = ?`)
+    .get(project.connection_id, userId);
+  if (!conn) throw new Error("Connection not found");
+
+  const adapter = getAdapter(conn.provider_id);
+  if (!adapter) throw new Error(`Unknown provider: ${conn.provider_id}`);
+
+  let credentials;
+  try {
+    credentials = decryptCredentials(conn.credentials_enc);
+  } catch {
+    throw new Error("Failed to decrypt credentials");
+  }
+
+  const system = buildSystemPrompt(settings);
+  const userMsg = buildUserPrompt(project, settings);
+
+  let result;
+  try {
+    result = await adapter.chat({
+      credentials,
+      model: project.model,
+      system,
+      messages: [{ role: "user", content: userMsg }],
+      maxTokens: 16384,
+      temperature: 0.65,
+    });
+  } catch (e) {
+    if (e instanceof ProviderError) throw e;
+    throw new Error(e.message || "Generation failed");
+  }
+
+  const html = extractHtml(result.text);
+  if (!html) {
+    const err = new Error("Model did not return valid HTML");
+    err.detail = result.text?.slice(0, 500);
+    throw err;
+  }
+
+  const validation = validateComposition(html);
+  const status = validation.ok ? "ok" : "failed";
+
+  db.prepare(
+    `UPDATE compositions SET status = ?, html = ?, validation_json = ?, error = ? WHERE id = ? AND user_id = ?`
+  ).run(
+    status,
+    html,
+    JSON.stringify(validation),
+    validation.ok ? null : validation.errors.join("; "),
+    compositionId,
+    userId
+  );
+
+  if (result.usage) {
+    db.prepare(
+      `INSERT INTO usage_records (id, user_id, connection_id, provider_id, model, prompt_tokens, completion_tokens, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      uuid(),
+      userId,
+      conn.id,
+      conn.provider_id,
+      project.model,
+      result.usage.promptTokens || 0,
+      result.usage.completionTokens || 0,
+      now()
+    );
+  }
+
+  return {
+    id: compositionId,
+    projectId,
+    status,
+    validation,
+  };
+}

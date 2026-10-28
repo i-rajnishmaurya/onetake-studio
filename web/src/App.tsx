@@ -858,6 +858,7 @@ function Workspace({ route }: { route: string }) {
   }, [connectionId, modelRefresh]);
 
   const activeJob = job?.status === "queued" || job?.status === "running";
+  const generating = composition?.status === "generating";
 
   useEffect(() => {
     if (!job?.id || !activeJob) return;
@@ -878,6 +879,34 @@ function Workspace({ route }: { route: string }) {
     timer = setTimeout(poll, 2000);
     return () => { live = false; clearTimeout(timer); };
   }, [job?.id, activeJob]);
+
+  // Keep polling composition while LLM generation runs in the background —
+  // user can leave and return; work continues on the server.
+  useEffect(() => {
+    if (!composition?.id || !generating) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const data = await api<{ composition: Composition }>(
+          `/compositions/${encodeURIComponent(composition.id)}`
+        );
+        if (!live) return;
+        const next = data.composition;
+        setComposition((previous) => ({ ...previous, ...next, id: next.id ?? composition.id }));
+        if (next.status === "ok") {
+          toast("Your composition is ready for a first look.");
+        }
+        setPollError("");
+      } catch (err) {
+        if (live) setPollError(message(err));
+      } finally {
+        if (live) timer = setTimeout(poll, 2500);
+      }
+    };
+    timer = setTimeout(poll, 2500);
+    return () => { live = false; clearTimeout(timer); };
+  }, [composition?.id, generating]);
 
   function update<K extends keyof Settings>(key: K, value: Settings[K]) {
     setSettings((previous) => ({ ...previous, [key]: value }));
@@ -931,7 +960,11 @@ function Workspace({ route }: { route: string }) {
       if (mounted.current) {
         setComposition(result.composition);
         setJob(null);
-        toast("Your composition is ready for a first look.");
+        toast(
+          result.composition?.status === "generating"
+            ? "Generation started — you can leave; it keeps running on the server."
+            : "Your composition is ready for a first look."
+        );
       }
     } catch (err) {
       if (mounted.current) setError(message(err));
@@ -970,7 +1003,7 @@ function Workspace({ route }: { route: string }) {
 
   const errors = validationErrors(composition?.validation);
   const failedComposition = composition?.status === "failed" || errors.length > 0;
-  const locked = busy || Boolean(activeJob) || renderBusy;
+  const locked = busy || generating || Boolean(activeJob) || renderBusy;
   const jobError = typeof job?.error === "string" ? job.error : job?.error?.message;
 
   if (opening) return <><PageHeading eyebrow="YOUR STUDIO" title="Opening your project…" description="Gathering the latest composition and render." /><Skeletons count={2} /></>;
@@ -1065,8 +1098,8 @@ function Workspace({ route }: { route: string }) {
 
         <section className="panel preview-panel">
           <div className="panel-title"><span><Play size={18} /> The first look</span><span className="small-text muted">02 / PREVIEW</span></div>
-          {busy ? (
-            <div className="preview-loading" role="status" aria-live="polite"><div className="skeleton preview-skeleton" /><Spinner /><h3>Good things are taking shape.</h3><p>Your model is composing the scene. This can take a few minutes.</p></div>
+          {busy || generating ? (
+            <div className="preview-loading" role="status" aria-live="polite"><div className="skeleton preview-skeleton" /><Spinner /><h3>{generating && !busy ? "Still composing on the server…" : "Good things are taking shape."}</h3><p>{generating && !busy ? "You can leave this page — generation keeps running. Come back anytime." : "Your model is composing the scene. This can take a few minutes."}</p></div>
           ) : composition ? (
             <>
               <div className={`composition-frame aspect-${settings.aspect.replace(":", "-")}`}>

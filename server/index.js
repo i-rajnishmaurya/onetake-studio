@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { getDb, DATA_DIR } from "./db.js";
 import { startWorker } from "./render/worker.js";
+import { startGenerationWorker } from "./generation-worker.js";
 import { mountStatic } from "./static.js";
 
 import authRoutes from "./routes/auth.js";
@@ -89,6 +90,7 @@ app.use((err, _req, res, _next) => {
 });
 
 startWorker();
+startGenerationWorker();
 
 app.listen(PORT, () => {
   console.log(`[onetake] listening on http://localhost:${PORT}`);
