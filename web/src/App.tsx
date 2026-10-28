@@ -25,7 +25,6 @@ import {
   LogOut,
   Monitor,
   Moon,
-  MoreHorizontal,
   Pencil,
   Play,
   Plus,
