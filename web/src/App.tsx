@@ -772,6 +772,7 @@ function Workspace({ route }: { route: string }) {
   const [pollError, setPollError] = useState("");
   const [modelRefresh, setModelRefresh] = useState(0);
   const generationRef = useRef(false);
+  const autoRenderRef = useRef<string | null>(null);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -868,7 +869,11 @@ function Workspace({ route }: { route: string }) {
       try {
         const data = await api<{ job: Job }>(`/jobs/${encodeURIComponent(job.id)}`);
         if (!live) return;
+        const prevStatus = job.status;
         setJob((previous) => ({ ...previous, ...data.job, id: data.job.id ?? job.id }));
+        if (prevStatus !== "succeeded" && data.job.status === "succeeded") {
+          toast("Your video is ready.");
+        }
         setPollError("");
       } catch (err) {
         if (live) setPollError(message(err));
@@ -907,6 +912,43 @@ function Workspace({ route }: { route: string }) {
     timer = setTimeout(poll, 2500);
     return () => { live = false; clearTimeout(timer); };
   }, [composition?.id, generating]);
+
+  // Auto-render when composition becomes ready (once per composition id)
+  useEffect(() => {
+    if (!project || !composition?.id) return;
+    if (composition.status !== "ok") return;
+    if (autoRenderRef.current === composition.id) return;
+    if (job && (job.status === "queued" || job.status === "running" || job.status === "succeeded")) return;
+    autoRenderRef.current = composition.id;
+    let cancelled = false;
+    (async () => {
+      try {
+        setRenderBusy(true);
+        const result = await api<{ job: Job }>(
+          `/projects/${encodeURIComponent(project.id)}/render`,
+          {
+            method: "POST",
+            body: {
+              compositionId: composition.id,
+              resolution: settings.resolution === "2160p" ? "final" : "draft"
+            }
+          }
+        );
+        if (!cancelled && mounted.current) {
+          setJob(result.job);
+          toast("Rendering your MP4 in the background…");
+        }
+      } catch (err) {
+        if (!cancelled && mounted.current) {
+          setError(message(err));
+          autoRenderRef.current = null; // allow retry
+        }
+      } finally {
+        if (mounted.current) setRenderBusy(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [composition?.id, composition?.status, project?.id]);
 
   function update<K extends keyof Settings>(key: K, value: Settings[K]) {
     setSettings((previous) => ({ ...previous, [key]: value }));
@@ -1138,10 +1180,20 @@ function Workspace({ route }: { route: string }) {
                 </>
               )}
               {job.status === "succeeded" && (
-                <>
-                  <video key={job.id} controls preload="metadata" src={`/api/jobs/${encodeURIComponent(job.id)}/download`} />
-                  <a href={`/api/jobs/${encodeURIComponent(job.id)}/download`} download className="button full"><ArrowDownToLine size={17} /> Download MP4</a>
-                </>
+                <div className="video-result">
+                  <video
+                    key={job.id}
+                    controls
+                    autoPlay
+                    muted
+                    playsInline
+                    preload="metadata"
+                    src={`/api/jobs/${encodeURIComponent(job.id)}/download`}
+                  />
+                  <a href={`/api/jobs/${encodeURIComponent(job.id)}/download`} download className="button full">
+                    <ArrowDownToLine size={17} /> Download MP4
+                  </a>
+                </div>
               )}
               {(job.status === "failed" || job.status === "canceled") && (
                 <><ErrorBanner text={jobError || (job.status === "canceled" ? "This render was canceled." : "The render failed. No additional error message was returned.")} /><button className="button secondary" disabled={renderBusy || busy} onClick={() => render(true)}>{renderBusy ? <Spinner /> : <RefreshCw size={16} />} Retry render</button></>

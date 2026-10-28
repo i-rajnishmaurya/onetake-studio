@@ -361,6 +361,8 @@ progress::-webkit-progress-bar { background: var(--surface-hover); }
 progress::-webkit-progress-value { background: var(--accent); border-radius: 8px; transition: width 180ms; }
 progress::-moz-progress-bar { background: var(--accent); }
 .render-section video { display: block; width: 100%; border-radius: 7px; margin-bottom: 15px; background: var(--canvas); }
+.video-result { display: flex; flex-direction: column; gap: 12px; }
+.video-result video { aspect-ratio: 16 / 9; object-fit: contain; background: #0a0a0a; }
 .mobile-brand, .mobile-theme, .mobile-nav { display: none; }
 
 .project-card { border: 1px solid var(--border); border-radius: 11px; background: var(--surface); overflow: hidden; }
